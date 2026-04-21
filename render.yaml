@@ -21,7 +21,7 @@ services:
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "30"
       - key: BACKEND_CORS_ORIGINS
-        value: '["*"]'
+        value: "*"
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_API_KEY_ALT
