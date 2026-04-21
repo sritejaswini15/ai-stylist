@@ -21,8 +21,10 @@ async def create_tryon(
     Perform a virtual AI try-on.
     """
     try:
+        import asyncio
         print(f"[API] Virtual Try-On requested by user {current_user.id}")
-        result_url = run_ai_tryon(
+        result_url = await asyncio.to_thread(
+            run_ai_tryon,
             request.person_image, 
             request.garment_image, 
             request.garment_description

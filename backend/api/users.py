@@ -4,9 +4,15 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import uuid
 import random
+import requests
+import json
+import re
+import httpx
+import asyncio
 
 from api.deps import get_current_user
 from database.session import get_db
+from core.config import settings
 from models.user import User
 from schemas.user import UserUpdate
 from services.ai_classifier import classify_clothing, analyze_user_appearance
@@ -25,7 +31,7 @@ class ChatRequest(BaseModel):
     history: List[ChatMessage] = []
 
 @router.post("/stylist-chat")
-def stylist_chat(
+async def stylist_chat(
     req: ChatRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -43,7 +49,7 @@ def stylist_chat(
         }
         
         history_dicts = [{"role": msg.role, "content": msg.content} for msg in req.history]
-        response_text = get_chatbot_response(req.message, history_dicts, profile)
+        response_text = await asyncio.to_thread(get_chatbot_response, req.message, history_dicts, profile)
         
         # Check for automated updates [UPDATE: field=value]
         if "[UPDATE:" in response_text:
@@ -72,7 +78,7 @@ class AppearanceAnalysisRequest(BaseModel):
     weight: Optional[int] = None
 
 @router.post("/analyze-appearance")
-def analyze_appearance(
+async def analyze_appearance(
     req: AppearanceAnalysisRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -85,7 +91,8 @@ def analyze_appearance(
             "body_shape": current_user.body_shape,
             "color_palette": current_user.color_palette
         }
-        analysis = analyze_user_appearance(req.image_base64, req.height, req.weight, existing_profile)
+        
+        analysis = await asyncio.to_thread(analyze_user_appearance, req.image_base64, req.height, req.weight, existing_profile)
         
         # Update user profile with analysis results
         if analysis and analysis.get("body_shape"):
@@ -476,19 +483,13 @@ class SearchQuery(BaseModel):
     gender: Optional[str] = "All"
 
 @router.post("/search-products")
-def search_products(query: SearchQuery):
-    import requests
-    import json
-    import re
-    
-    SERPAPI_KEY = settings.SERPAPI_KEY or "5e53b42d55aa7e3fa16137ea25087a79aa00499d78906672da696e38aa186598"
+async def search_products(query: SearchQuery, current_user: User = Depends(get_current_user)):
     search_term = query.q
     refined_queries = []
     
     if query.refImageUrl and query.refImageUrl.startswith("data:image"):
         try:
-            from services.ai_classifier import classify_clothing
-            classification = classify_clothing(query.refImageUrl)
+            classification = await classify_clothing(query.refImageUrl)
             cat = classification.get("category", "")
             subcat = classification.get("sub_category", "")
             color = classification.get("color", "")
@@ -500,7 +501,7 @@ def search_products(query: SearchQuery):
                 refined_queries.append(f"{color} {cat}")
                 refined_queries.append(f"{style} {subcat}")
         except Exception as e:
-            print(f"[API] Error: {e}")
+            print(f"[API] Classification Error: {e}")
     
     if search_term and len(search_term.split()) > 7:
         search_term = " ".join(search_term.split()[:5])
@@ -526,64 +527,73 @@ def search_products(query: SearchQuery):
     if is_generic and not any(kw in search_term.lower() for kw in ["jeans", "kurta", "top", "shirt", "pant", "dress", "shoe", "bag", "accessory"]):
         search_term += " fashion clothing"
         
-    print(f"[API] Searching SerpApi: '{search_term}' (Gender: {query.gender})")
+    print(f"[API] Searching SerpApi (Async): '{search_term}' (Gender: {query.gender})")
     
+    SERPAPI_KEY = settings.SERPAPI_KEY or "5e53b42d55aa7e3fa16137ea25087a79aa00499d78906672da696e38aa186598"
     products = []
     try:
-        params = {"engine": "google_shopping", "q": search_term, "api_key": SERPAPI_KEY, "hl": "en", "gl": "in", "num": 100}
-        if query.maxPrice: params["tbs"] = f"mr:1,price:1,ppr_max:{query.maxPrice}"
+        params = {
+            "engine": "google_shopping", 
+            "q": search_term, 
+            "api_key": SERPAPI_KEY, 
+            "hl": "en", 
+            "gl": "in", 
+            "num": 100
+        }
+        if query.maxPrice: 
+            params["tbs"] = f"mr:1,price:1,ppr_max:{query.maxPrice}"
         
-        response = requests.get("https://serpapi.com/search.json", params=params, timeout=15)
-        if response.status_code == 200:
-            shopping_results = response.json().get("shopping_results", [])
-            irrelevant_keywords = ["vitamin", "supplement", "ebook", "manga", "novel", "tablet", "medicine"]
+        async with httpx.AsyncClient() as client:
+            response = await client.get("https://serpapi.com/search.json", params=params, timeout=15)
             
-            # Strict gender filtering keywords
-            exclude_men = ["men", "male", "boy", "guy", "gentleman"]
-            exclude_women = ["women", "woman", "lady", "ladies", "girl", "female", "kurti", "saree", "dress", "gown"]
-            
-            for idx, item in enumerate(shopping_results):
-                title = item.get("title", "").lower()
-                if any(ikw in title for ikw in irrelevant_keywords): continue
+            if response.status_code == 200:
+                shopping_results = response.json().get("shopping_results", [])
+                irrelevant_keywords = ["vitamin", "supplement", "ebook", "manga", "novel", "tablet", "medicine"]
                 
-                # STRICT GENDER FILTERING
-                if query.gender == "Men":
-                    # If looking for Men, exclude anything that explicitly mentions women keywords
-                    # Using regex word boundary to avoid "men" matching "women"
-                    if any(re.search(rf"\b{word}\b", title) for word in exclude_women):
-                        continue
-                elif query.gender == "Women":
-                    # If looking for Women, exclude anything that explicitly mentions men keywords
-                    # But be CAREFUL not to exclude "women" because it contains "men"
-                    if any(re.search(rf"\b{word}\b", title) for word in exclude_men):
-                        continue
+                # Strict gender filtering keywords
+                exclude_men = ["men", "male", "boy", "guy", "gentleman"]
+                exclude_women = ["women", "woman", "lady", "ladies", "girl", "female", "kurti", "saree", "dress", "gown"]
                 
-                link = item.get("link", "")
-                if not link or link == "#": link = item.get("product_link", "#")
-                if link != "#" and not link.startswith("http"): link = "https://" + link
-                
-                price_str = item.get("price", "0")
-                price_val = 0.0
-                try:
-                    temp_price = price_str.replace(",", "")
-                    match = re.search(r'(\d+(\.\d+)?)', temp_price)
-                    if match: price_val = float(match.group(1))
-                except: pass
-                
-                if query.maxPrice and price_val > query.maxPrice: continue
+                for idx, item in enumerate(shopping_results):
+                    title = item.get("title", "").lower()
+                    if any(ikw in title for ikw in irrelevant_keywords): continue
+                    
+                    # STRICT GENDER FILTERING
+                    if query.gender == "Men":
+                        if any(re.search(rf"\b{word}\b", title) for word in exclude_women):
+                            continue
+                    elif query.gender == "Women":
+                        if any(re.search(rf"\b{word}\b", title) for word in exclude_men):
+                            continue
+                    
+                    link = item.get("link", "")
+                    if not link or link == "#": link = item.get("product_link", "#")
+                    if link != "#" and not link.startswith("http"): link = "https://" + link
+                    
+                    price_str = item.get("price", "0")
+                    price_val = 0.0
+                    try:
+                        temp_price = price_str.replace(",", "")
+                        match = re.search(r'(\d+(\.\d+)?)', temp_price)
+                        if match: price_val = float(match.group(1))
+                    except: pass
+                    
+                    if query.maxPrice and price_val > query.maxPrice: continue
 
-                products.append({
-                    "id": item.get("product_id", str(uuid.uuid4())),
-                    "title": item.get("title", "Unknown Product"),
-                    "price": price_val,
-                    "imageUrl": item.get("thumbnail", ""),
-                    "source": item.get("source", "Unknown Store"),
-                    "link": link,
-                    "category": query.q,
-                    "tags": [search_term]
-                })
-        else: print(f"[API] Error: {response.status_code}")
-    except Exception as e: print(f"[API] Error: {e}")
+                    products.append({
+                        "id": item.get("product_id", str(uuid.uuid4())),
+                        "title": item.get("title", "Unknown Product"),
+                        "price": price_val,
+                        "imageUrl": item.get("thumbnail", ""),
+                        "source": item.get("source", "Unknown Store"),
+                        "link": link,
+                        "category": query.q,
+                        "tags": [search_term]
+                    })
+            else: 
+                print(f"[API] SerpApi Error: {response.status_code}")
+    except Exception as e: 
+        print(f"[API] Error during search: {e}")
         
     refined_queries = list(dict.fromkeys([q for q in refined_queries if q]))
     return {"status": "success", "data": {"products": products, "refinedQueries": refined_queries, "engine": "SerpApi Google Shopping"}}

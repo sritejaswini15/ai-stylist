@@ -93,10 +93,14 @@ def log_ai(message: str):
     except Exception as e:
         print(f"Logging failed: {e}")
 
-def classify_clothing(image_base64: str) -> dict:
+async def classify_clothing(image_base64: str) -> dict:
+    import asyncio
     available_keys = [settings.GEMINI_API_KEY, settings.GEMINI_API_KEY_ALT]
     available_keys = [k for k in available_keys if k]
     if not available_keys: return get_mock_classification()
+    return await asyncio.to_thread(_classify_clothing_sync, image_base64, available_keys)
+
+def _classify_clothing_sync(image_base64: str, available_keys: list) -> dict:
     for api_key in available_keys:
         try:
             genai.configure(api_key=api_key)
@@ -140,7 +144,9 @@ def classify_clothing(image_base64: str) -> dict:
                 "location": standardize(raw.get("location", []), LOCATIONS), "color_palette": standardize(raw.get("color_palette", []), COLOR_PALETTES),
                 "specific_colors": standardize([raw.get("main_color", "Neutral")], SPECIFIC_COLORS), "tags": raw.get("extra_tags", []), "time": standardize(raw.get("time", ["Anytime"]), TIMES)
             }
-        except: continue
+        except Exception as e:
+            print(f"[AI CLASSIFIER ERROR] {e}")
+            continue
     return get_mock_classification()
 
 def analyze_user_appearance(image_base_64: str, height: int = None, weight: int = None, existing_profile: dict = None) -> dict:

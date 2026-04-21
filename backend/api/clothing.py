@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
@@ -15,7 +16,7 @@ from services.hf_service import get_image_embedding
 router = APIRouter()
 
 @router.post("/upload", response_model=ClothingSchema)
-def upload_clothing(
+async def upload_clothing(
     clothing_in: ClothingCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -25,22 +26,24 @@ def upload_clothing(
     """
     print(f"[API] Uploading clothing for user {current_user.id}...")
     
-    # 1. Compress image to reasonable size for APIs
-    # This also standardizes the format to PNG
+    # 1. Compress image to reasonable size for APIs (CPU intensive, synchronous is fine for now)
     compressed_img = compress_image(clothing_in.image_base64)
     
-    # 2. Remove background (fallback to original if fails)
-    # We pass the compressed image to save bandwidth/credits
-    processed_img = remove_background(compressed_img)
+    # 2. Remove background (Async API call)
+    processed_img = await remove_background(compressed_img)
     
-    # 3. AI Classification (fallback to mock if fails)
-    # Gemini analyzes the processed image for best results
-    classification = classify_clothing(processed_img)
+    # 3. AI Classification & Generate Visual DNA (Concurrent Async Calls)
+    # We do these in parallel to save time
+    print(f"[API] Starting classification and embedding generation concurrently...")
+    classification_task = classify_clothing(processed_img)
+    embedding_task = get_image_embedding(processed_img)
+    
+    classification, visual_embedding = await asyncio.gather(
+        classification_task, 
+        embedding_task
+    )
+    
     print(f"[API] Classification received: {classification}")
-    
-    # 4. Generate Visual DNA (Hugging Face CLIP)
-    # This stores a numerical vector representing the visual style/texture
-    visual_embedding = get_image_embedding(processed_img)
     if visual_embedding:
         print(f"[API] Visual embedding generated successfully")
     
@@ -48,7 +51,7 @@ def upload_clothing(
     try:
         new_clothing = Clothing(
             user_id=current_user.id,
-            image_base64=processed_img, # Store the background-removed version
+            image_base64=processed_img,
             category=classification.get("category"),
             sub_category=classification.get("sub_category"),
             color=classification.get("color"),
@@ -68,7 +71,7 @@ def upload_clothing(
         db.add(new_clothing)
         db.commit()
         db.refresh(new_clothing)
-        print(f"[API] Successfully stored clothing item {new_clothing.id} with category {new_clothing.category}")
+        print(f"[API] Successfully stored clothing item {new_clothing.id}")
         return new_clothing
     except Exception as e:
         print(f"[API] Error saving to database: {e}")

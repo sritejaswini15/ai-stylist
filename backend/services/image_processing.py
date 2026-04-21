@@ -1,15 +1,14 @@
-import requests
+import httpx
 import base64
 import io
 from PIL import Image
 from core.config import settings
 
-def remove_background(image_base64: str) -> str:
+async def remove_background(image_base64: str) -> str:
     """
-    Removes background using remove.bg API.
+    Removes background using remove.bg API (Async).
     Local AI removal was removed to reduce dependencies.
     """
-    # ... Fallback to remove.bg
     if not settings.REMOVE_BG_API_KEY:
         print("[ImageProcessing] No API key, returning original.")
         return image_base64
@@ -21,20 +20,25 @@ def remove_background(image_base64: str) -> str:
             clean_base64 = image_base64.split(",")[1]
         image_data = base64.b64decode(clean_base64)
         
-        response = requests.post(
-            'https://api.remove.bg/v1.0/removebg',
-            files={'image_file': ('image.png', image_data)},
-            data={'size': 'auto'},
-            headers={'X-Api-Key': settings.REMOVE_BG_API_KEY},
-            timeout=30
-        )
-        
-        if response.status_code == requests.codes.ok:
-            print("[ImageProcessing] API background removal successful.")
-            return base64.b64encode(response.content).decode('utf-8')
-        else:
-            print(f"[ImageProcessing] API failed: {response.status_code} {response.text}")
-            return image_base64
+        async with httpx.AsyncClient() as client:
+            files = {'image_file': ('image.png', image_data)}
+            data = {'size': 'auto'}
+            headers = {'X-Api-Key': settings.REMOVE_BG_API_KEY}
+            
+            response = await client.post(
+                'https://api.remove.bg/v1.0/removebg',
+                files=files,
+                data=data,
+                headers=headers,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                print("[ImageProcessing] API background removal successful.")
+                return base64.b64encode(response.content).decode('utf-8')
+            else:
+                print(f"[ImageProcessing] API failed: {response.status_code} {response.text}")
+                return image_base64
     except Exception as e:
         print(f"[ImageProcessing] Removal failed: {e}")
         return image_base64

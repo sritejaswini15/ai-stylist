@@ -1,5 +1,5 @@
 import numpy as np
-import requests
+import httpx
 import base64
 from core.config import settings
 
@@ -30,49 +30,52 @@ def calculate_similarity(vec1: list, vec2: list) -> float:
     except Exception as e:
         print(f"[HF ERROR] Similarity calculation failed: {e}")
         return 0.0
+
 HF_API_URL = "https://api-inference.huggingface.co/models/openai/clip-vit-base-patch32"
 HEADERS = {"Authorization": f"Bearer {settings.HF_TOKEN}"}
 
-def get_image_embedding(image_base64: str) -> list:
+async def get_image_embedding(image_base64: str) -> list:
     """
-    Get 512-dimensional vector embedding for an image using CLIP.
+    Get 512-dimensional vector embedding for an image using CLIP (Async).
     """
     try:
         # Remove header if present
         clean_base64 = image_base64.split(",")[1] if "," in image_base64 else image_base64
         image_data = base64.b64decode(clean_base64)
         
-        response = requests.post(HF_API_URL, headers=HEADERS, data=image_data)
-        
-        if response.status_code != 200:
-            print(f"[HF ERROR] Image embedding failed ({response.status_code}): {response.text}")
-            return None
+        async with httpx.AsyncClient() as client:
+            response = await client.post(HF_API_URL, headers=HEADERS, content=image_data, timeout=30)
             
-        # CLIP feature extraction usually returns a list of embeddings
-        result = response.json()
-        if isinstance(result, list) and len(result) > 0:
+            if response.status_code != 200:
+                print(f"[HF ERROR] Image embedding failed ({response.status_code}): {response.text}")
+                return None
+                
+            # CLIP feature extraction usually returns a list of embeddings
+            result = response.json()
+            if isinstance(result, list) and len(result) > 0:
+                return result
             return result
-        return result
     except Exception as e:
         print(f"[HF ERROR] Exception in get_image_embedding: {e}")
         return None
 
-def get_text_embedding(text: str) -> list:
+async def get_text_embedding(text: str) -> list:
     """
-    Get 512-dimensional vector embedding for text using CLIP.
+    Get 512-dimensional vector embedding for text using CLIP (Async).
     """
     try:
         payload = {"inputs": text}
-        response = requests.post(HF_API_URL, headers=HEADERS, json=payload)
-        
-        if response.status_code != 200:
-            print(f"[HF ERROR] Text embedding failed ({response.status_code}): {response.text}")
-            return None
+        async with httpx.AsyncClient() as client:
+            response = await client.post(HF_API_URL, headers=HEADERS, json=payload, timeout=30)
             
-        result = response.json()
-        if isinstance(result, list) and len(result) > 0:
+            if response.status_code != 200:
+                print(f"[HF ERROR] Text embedding failed ({response.status_code}): {response.text}")
+                return None
+                
+            result = response.json()
+            if isinstance(result, list) and len(result) > 0:
+                return result
             return result
-        return result
     except Exception as e:
         print(f"[HF ERROR] Exception in get_text_embedding: {e}")
         return None

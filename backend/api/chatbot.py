@@ -19,7 +19,7 @@ class ChatRequest(BaseModel):
     history: List[ChatMessage] = []
 
 @router.post("/")
-def chat(
+async def chat(
     req: ChatRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -46,10 +46,10 @@ def chat(
         }
         
         # Convert Pydantic history objects to dicts for the service
-        # Frontend uses 'assistant'/'user', service handles 'model'/'assistant'/'user'
         history_dicts = [{"role": msg.role, "content": msg.content} for msg in req.history]
         
-        response_text = get_chatbot_response(req.message, history_dicts, user_profile)
+        import asyncio
+        response_text = await asyncio.to_thread(get_chatbot_response, req.message, history_dicts, user_profile)
         
         profile_updated = False
         # Check for automated updates [UPDATE: field=value]

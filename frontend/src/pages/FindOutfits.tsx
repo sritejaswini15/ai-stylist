@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 import UnifiedHeader from "@/components/UnifiedHeader";
 import { SPECIFIC_COLORS } from "@/constants";
 import { getApiUrl } from "@/services/api";
+import { WishlistItem } from "@/types";
 
 interface Product {
   id: string;
@@ -145,9 +146,12 @@ const FindOutfits = () => {
         if (data.data.products?.length > 0) {
           setTimeout(() => { resultsRef.current?.scrollIntoView({ behavior: "smooth" }); }, 100);
         }
+      } else {
+        toast.error(data.message || "Search failed on server");
       }
     } catch (error) {
-      toast.error("Shopping API connection failed");
+      console.error("Search Error:", error);
+      toast.error(error instanceof Error ? error.message : "Shopping API connection failed");
     } finally {
       setLoading(false);
     }
