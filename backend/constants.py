@@ -1,0 +1,10 @@
+CATEGORIES = ["Tops", "Bottoms", "Shoes", "Dresses", "Accessories", "Other"]
+
+OCCASIONS = ["Work", "Casual", "Party", "Wedding", "Date Night", "Brunch", "Travel", "Airport", "Festival", "Formal Event", "Gym", "Lounge"]
+STYLE_AESTHETICS = ["Minimalist", "Classic", "Streetwear", "Old Money", "Y2K", "Chic", "Bohemian", "Korean", "Vintage", "Sporty", "Luxury", "Edgy"]
+MOODS = ["Confident", "Soft", "Bold", "Elegant", "Playful", "Mysterious", "Chill", "Romantic", "Powerful", "Cute"]
+TIMES = ["Morning", "Afternoon", "Evening", "Night"]
+LOCATIONS = ["Indoor", "Outdoor", "Beach", "City", "Office", "Resort", "Street", "Home"]
+WEATHERS = ["Summer", "Winter", "Spring", "Fall", "Rainy", "Snowy", "Humid", "Windy"]
+SPECIFIC_COLORS = ["Red", "Blue", "Green", "Yellow", "Pink", "Purple", "Orange", "Black", "White", "Brown", "Grey", "Beige"]
+COLOR_PALETTES = ["Neutral", "Dark", "Light", "Bold", "Monochrome", "Pastel"]
