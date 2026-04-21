@@ -20,17 +20,21 @@ services:
         value: HS256
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "30"
-      - key: OPENAI_API_KEY
-        sync: false
+      - key: BACKEND_CORS_ORIGINS
+        value: '["*"]'
       - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY_ALT
         sync: false
       - key: CHATBOT_GEMINI_API_KEY
         sync: false
-      - key: FAL_KEY
+      - key: HF_TOKEN
+        sync: false
+      - key: HF_TOKEN_ALT
+        sync: false
+      - key: SERPAPI_KEY
         sync: false
       - key: REMOVE_BG_API_KEY
-        sync: false
-      - key: HF_TOKEN
         sync: false
 
 databases:
