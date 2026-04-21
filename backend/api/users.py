@@ -538,7 +538,7 @@ async def search_products(query: SearchQuery, current_user: User = Depends(get_c
             "api_key": SERPAPI_KEY, 
             "hl": "en", 
             "gl": "in", 
-            "num": 100
+            "num": 40
         }
         if query.maxPrice: 
             params["tbs"] = f"mr:1,price:1,ppr_max:{query.maxPrice}"

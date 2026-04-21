@@ -98,6 +98,7 @@ async def classify_clothing(image_base64: str) -> dict:
     available_keys = [settings.GEMINI_API_KEY, settings.GEMINI_API_KEY_ALT]
     available_keys = [k for k in available_keys if k]
     if not available_keys: return get_mock_classification()
+    # Execute in a thread to avoid blocking the event loop
     return await asyncio.to_thread(_classify_clothing_sync, image_base64, available_keys)
 
 def _classify_clothing_sync(image_base64: str, available_keys: list) -> dict:
@@ -107,7 +108,24 @@ def _classify_clothing_sync(image_base64: str, available_keys: list) -> dict:
             model = genai.GenerativeModel('gemini-flash-latest')
             clean_base64 = image_base64.split(",")[1] if "," in image_base64 else image_base64
             img = Image.open(io.BytesIO(base64.b64decode(clean_base64)))
-            prompt = "Identify clothing item. Return JSON: {category, subcategory, main_color, color_palette[], occasion[], aesthetic[], mood[], season[], weather[], location[], style[], extra_tags[]}"
+            
+            prompt = """
+            Identify the clothing item in the image with high precision.
+            Return a JSON object with:
+            - category: Must be one of [Tops, Bottoms, Shoes, Dresses, Accessories, Other]
+            - subcategory: A detailed, specific description (e.g., 'Wide Leg Jeans', 'High-Neck Crop Top', 'Oversized Graphic Hoodie', 'Midi Floral Sun Dress', 'Chelsea Boots')
+            - main_color: The dominant color name
+            - color_palette: List of 3-5 complementary colors seen
+            - occasion: List of appropriate occasions
+            - aesthetic: Style aesthetics (e.g., Streetwear, Minimalist, Y2K, Old Money)
+            - mood: Moods the item evokes
+            - season: Suitable seasons
+            - weather: Suitable weather conditions
+            - location: Suitable locations
+            - style: General style category
+            - extra_tags: Additional descriptive tags
+            """
+            
             response = model.generate_content([prompt, img])
             text = response.text
             start, end = text.find('{'), text.rfind('}')
@@ -121,7 +139,9 @@ def _classify_clothing_sync(image_base64: str, available_keys: list) -> dict:
             elif "Accessory" in raw_cat or "Bag" in raw_cat: category = "Accessories"
             else: category = "Other"
 
+            # Use the detailed subcategory from AI
             sub_cat = raw.get("subcategory", "Item").title()
+            # Basic cleanup
             if sub_cat == "T-Shirts": sub_cat = "T-Shirt"
             if sub_cat == "Shirts": sub_cat = "Shirt"
 
@@ -129,6 +149,7 @@ def _classify_clothing_sync(image_base64: str, available_keys: list) -> dict:
                 if not items: return []
                 result = []
                 for item in items:
+                    if not isinstance(item, str): continue
                     item_low = item.lower()
                     for const in constants:
                         if const.lower() in item_low or item_low in const.lower():
@@ -137,15 +158,22 @@ def _classify_clothing_sync(image_base64: str, available_keys: list) -> dict:
 
             from constants import OCCASIONS, STYLE_AESTHETICS, MOODS, TIMES, LOCATIONS, WEATHERS, SPECIFIC_COLORS, COLOR_PALETTES
             return {
-                "category": category, "sub_category": sub_cat, "color": raw.get("main_color", "Neutral").title(), "style": "Casual",
+                "category": category, 
+                "sub_category": sub_cat, 
+                "color": raw.get("main_color", "Neutral").title(), 
+                "style": raw.get("style", "Casual").title(),
                 "occasion": standardize(raw.get("occasion", []), OCCASIONS),
                 "style_aesthetic": standardize(raw.get("aesthetic", []), STYLE_AESTHETICS),
-                "mood": standardize(raw.get("mood", []), MOODS), "weather": standardize(raw.get("weather", []), WEATHERS),
-                "location": standardize(raw.get("location", []), LOCATIONS), "color_palette": standardize(raw.get("color_palette", []), COLOR_PALETTES),
-                "specific_colors": standardize([raw.get("main_color", "Neutral")], SPECIFIC_COLORS), "tags": raw.get("extra_tags", []), "time": standardize(raw.get("time", ["Anytime"]), TIMES)
+                "mood": standardize(raw.get("mood", []), MOODS), 
+                "weather": standardize(raw.get("weather", []), WEATHERS),
+                "location": standardize(raw.get("location", []), LOCATIONS), 
+                "color_palette": standardize(raw.get("color_palette", []), COLOR_PALETTES),
+                "specific_colors": standardize([raw.get("main_color", "Neutral")], SPECIFIC_COLORS), 
+                "tags": raw.get("extra_tags", []), 
+                "time": standardize(raw.get("time", ["Anytime"]), TIMES)
             }
         except Exception as e:
-            print(f"[AI CLASSIFIER ERROR] {e}")
+            print(f"[AI CLASSIFIER ERROR] Key {api_key[:8]}... failed: {e}")
             continue
     return get_mock_classification()
 
@@ -157,77 +185,64 @@ def analyze_user_appearance(image_base_64: str, height: int = None, weight: int 
     compressed_img_b64 = compress_image(image_base_64, max_size=1280)
     img_pil = Image.open(io.BytesIO(base64.b64decode(compressed_img_b64)))
 
-    log_ai(f"Starting detailed analysis: {height}cm, {weight}kg")
+    log_ai(f"Starting optimized analysis: {height}cm, {weight}kg")
 
-    extracted_features = {}
     for api_key in available_keys:
         for model_name in ['gemini-flash-latest', 'gemini-1.5-flash']:
             try:
                 genai.configure(api_key=api_key)
                 model = genai.GenerativeModel(model_name)
-                extraction_prompt = f"Analyze photo. Return JSON: {{shoulder_width: float, bust: float, waist: float, hip: float, skin_rgb: [r,g,b], hair_rgb: [r,g,b], eye_rgb: [r,g,b]}}. Height: {height}cm."
-                res = model.generate_content([extraction_prompt, img_pil])
-                text = res.text
-                start, end = text.find('{'), text.rfind('}')
-                if start != -1 and end != -1:
-                    extracted_features = json.loads(text[start:end+1])
-                    break
-            except: continue
-        if extracted_features: break
-
-    if not extracted_features:
-        extracted_features = {"shoulder_width": 40.0, "bust": 90.0, "waist": 70.0, "hip": 95.0, "skin_rgb": [200, 150, 120], "hair_rgb": [50, 40, 30], "eye_rgb": [80, 60, 50]}
-
-    body_match = find_nearest_body_match(float(height or 170), float(extracted_features.get("shoulder_width", 40)), float(extracted_features.get("bust", 90)), float(extracted_features.get("waist", 70)), float(extracted_features.get("hip", 95)))
-    color_match = find_nearest_color_match(extracted_features.get("skin_rgb", [200,150,120]), extracted_features.get("hair_rgb", [50,40,30]), extracted_features.get("eye_rgb", [80,60,50]))
-    
-    ground_truth_context = f"""
-    DATASET ARCHETYPE (USE AS BASIS):
-    - Body Type: {body_match['body_shape'] if body_match else 'Hourglass'}
-    - Color Season: {color_match['subseason'] if color_match else 'Deep Winter'}
-    - Recommended Fits: {body_match['recommended_fits'] if body_match else 'Structured, Tailored'}
-    - Avoid Fits: {body_match['avoid_fits'] if body_match else 'Boxy, Oversized'}
-    - Primary Colors: {color_match['primary_colors'] if color_match else 'Emerald, Royal Blue'}
-    - Avoid Colors: {color_match['avoid_colors_strict'] if color_match else 'Neon, Earthy Brown'}
-    """
-
-    for api_key in available_keys:
-        for model_name in ['gemini-flash-latest', 'gemini-1.5-flash']:
-            try:
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel(model_name) 
+                
+                # Combined Prompt for efficiency
                 prompt = f"""
-                You are a World-Class Style Architect. Generate a high-end fashion analysis.
-                {ground_truth_context}
-                User Stats: {height}cm, {weight}kg.
-
-                TASK: 
-                1. Take the dataset archetypes above and EXPAND them into a surgical, luxurious report.
-                2. Curate 10 power colors, 8 neutrals, 10 accents with hex codes.
-                3. Curate 10 fits to embrace and 10 to avoid.
-                4. Provide detailed paragraph-long advice for tops, bottoms, and dresses.
-                5. CRITICAL: Never return empty lists or blank strings. Each entry must have a professional 'reason'.
-
-                Return JSON object:
+                Analyze this photo of a person. User Stats: {height}cm, {weight}kg.
+                
+                TASK:
+                1. Extract physical measurements (as percentages/ratios relative to height): shoulder_width, bust, waist, hip.
+                2. Extract RGB colors for skin, hair, and eyes.
+                3. Determine body shape (e.g., Hourglass, Rectangle, Inverted Triangle, Pear, Apple).
+                4. Determine seasonal color archetype (e.g., Deep Winter, Soft Summer).
+                5. Provide a surgical, luxurious style analysis.
+                
+                Return ONLY a JSON object:
                 {{
-                  "sub_season": "...", "body_shape": "...",
-                  "color_analysis": {{
-                    "undertone": "Cool/Warm/Neutral", "contrast_level": "High/Medium/Low",
-                    "best_colors": {{ "power_colors": [{{name, hex, reason}}], "neutrals": [{{name, hex, reason}}], "accents": [{{name, hex, reason}}] }},
-                    "avoid_colors": [{{name, hex, reason}}]
+                  "body_shape": "...",
+                  "sub_season": "...",
+                  "extracted_features": {{
+                    "shoulder_width": 0.0, "bust": 0.0, "waist": 0.0, "hip": 0.0,
+                    "skin_rgb": [r,g,b], "hair_rgb": [r,g,b], "eye_rgb": [r,g,b]
                   }},
-                  "clothing_analysis": {{ "styles_to_embrace": [{{item, reason}}], "styles_to_avoid": [{{item, reason}}] }},
-                  "fashion_advice": {{ "tops": "...", "bottoms": "...", "dresses": "...", "general": "..." }}
+                  "color_analysis": {{
+                    "undertone": "Cool/Warm/Neutral",
+                    "contrast_level": "High/Medium/Low",
+                    "best_colors": {{
+                      "power_colors": [{{ "name": "...", "hex": "...", "reason": "..." }}],
+                      "neutrals": [{{ "name": "...", "hex": "...", "reason": "..." }}],
+                      "accents": [{{ "name": "...", "hex": "...", "reason": "..." }}]
+                    }},
+                    "avoid_colors": [{{ "name": "...", "hex": "...", "reason": "..." }}]
+                  }},
+                  "clothing_analysis": {{
+                    "styles_to_embrace": [{{ "item": "...", "reason": "..." }}],
+                    "styles_to_avoid": [{{ "item": "...", "reason": "..." }}]
+                  }},
+                  "fashion_advice": {{
+                    "tops": "...", "bottoms": "...", "dresses": "...", "general": "..."
+                  }}
                 }}
                 """
+                
                 response = model.generate_content([prompt, img_pil])
                 text = response.text
                 start, end = text.find('{'), text.rfind('}')
                 if start == -1 or end == -1: continue
+                
                 result = json.loads(text[start:end+1])
-                log_ai("Detailed Analysis Success.")
+                log_ai("Optimized Detailed Analysis Success.")
                 return result
-            except: continue
+            except Exception as e:
+                print(f"[AI ANALYSIS ERROR] {e}")
+                continue
             
     return get_mock_appearance_analysis()
 

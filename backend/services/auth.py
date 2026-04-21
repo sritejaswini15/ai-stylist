@@ -23,11 +23,11 @@ def create_user(db: Session, user_in: UserCreate):
     return db_obj
 
 def authenticate(db: Session, login_id: str, password: str):
-    # Try by email first
-    user = get_user_by_email(db, login_id)
-    if not user:
-        # Try by username
-        user = get_user_by_username(db, login_id)
+    # Combined query for email or username to save a DB roundtrip
+    user = db.query(User).filter(
+        (func.lower(User.email) == func.lower(login_id)) | 
+        (func.lower(User.username) == func.lower(login_id))
+    ).first()
 
     if not user:
         return None
